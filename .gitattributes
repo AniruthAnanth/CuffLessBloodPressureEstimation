@@ -6,3 +6,4 @@ data/csv/Part_1.csv filter=lfs diff=lfs merge=lfs -text
 data/csv/Part_2.csv filter=lfs diff=lfs merge=lfs -text
 data/csv/Part_3.csv filter=lfs diff=lfs merge=lfs -text
 data/csv/Part_4.csv filter=lfs diff=lfs merge=lfs -text
+data/csv/All.csv filter=lfs diff=lfs merge=lfs -text

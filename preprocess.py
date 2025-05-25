@@ -127,7 +127,13 @@ def convert_file(filename: str) -> pd.DataFrame:
     return df
 
 if __name__ == '__main__':
+    all_dfs = []
     for filename in os.listdir(INPUT_DIR):
         if filename.endswith('.mat'):
             print(f'Processing {filename}...')
-            convert_file(filename)
+            df = convert_file(filename)
+            all_dfs.append(df)
+    if all_dfs:
+        mega_df = pd.concat(all_dfs, ignore_index=True)
+        print(f'Saving all.csv with {len(mega_df)} records...')
+        mega_df.to_csv(os.path.join(OUTPUT_DIR, 'All.csv'), index=False)
