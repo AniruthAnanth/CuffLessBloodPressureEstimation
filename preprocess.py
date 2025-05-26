@@ -8,6 +8,7 @@ import pandas as pd
 import os
 from scipy.signal import find_peaks, correlate, welch, butter, filtfilt
 from scipy.integrate import trapz
+from scipy.stats import entropy
 
 INPUT_DIR = 'data/mat/'
 OUTPUT_DIR = 'data/csv/'
@@ -168,6 +169,166 @@ def estimate_respiratory_rate(signal, fs):
     
     return min(resp_rate, 60)  # Cap at 60 breaths/min
 
+def calculate_time_to_peak(ppg_signal, peaks, troughs, fs):
+    """Calculate time-to-peak features"""
+    if len(peaks) < 2 or len(troughs) < 2:
+        return {'time_to_peak': 0, 'peak_to_peak_time': 0}
+    
+    time_to_peaks = []
+    peak_to_peak_times = []
+    
+    for i, peak in enumerate(peaks):
+        # Find corresponding trough before peak
+        prev_troughs = troughs[troughs < peak]
+        if len(prev_troughs) > 0:
+            trough_before = prev_troughs[-1]
+            time_to_peak = (peak - trough_before) / fs
+            time_to_peaks.append(time_to_peak)
+    
+    # Peak-to-peak intervals
+    if len(peaks) > 1:
+        peak_intervals = np.diff(peaks) / fs
+        peak_to_peak_times.extend(peak_intervals)
+    
+    return {
+        'time_to_peak': np.mean(time_to_peaks) if time_to_peaks else 0,
+        'peak_to_peak_time': np.mean(peak_to_peak_times) if peak_to_peak_times else 0
+    }
+
+def calculate_ppg_asymmetry_harmonics(ppg_signal, peaks, fs):
+    """Calculate PPG asymmetry and harmonic ratios"""
+    if len(peaks) < 2:
+        return {'asymmetry_ratio': 0, 'harmonic_ratio_2nd': 0, 'harmonic_ratio_3rd': 0}
+    
+    asymmetry_ratios = []
+    
+    for i, peak in enumerate(peaks):
+        # Define pulse boundaries
+        if i == 0:
+            start_idx = max(0, peak - int(0.5 * fs))
+        else:
+            start_idx = (peaks[i-1] + peak) // 2
+        
+        if i == len(peaks) - 1:
+            end_idx = min(len(ppg_signal), peak + int(0.5 * fs))
+        else:
+            end_idx = (peak + peaks[i+1]) // 2
+        
+        pulse = ppg_signal[start_idx:end_idx]
+        if len(pulse) < 10:
+            continue
+        
+        # Calculate asymmetry ratio
+        peak_in_pulse = np.argmax(pulse)
+        if peak_in_pulse > 0 and peak_in_pulse < len(pulse) - 1:
+            upstroke_area = np.trapz(pulse[:peak_in_pulse])
+            downstroke_area = np.trapz(pulse[peak_in_pulse:])
+            if downstroke_area != 0:
+                asymmetry_ratio = upstroke_area / downstroke_area
+                asymmetry_ratios.append(asymmetry_ratio)
+    
+    # Calculate harmonic ratios using FFT
+    freqs, psd = welch(ppg_signal, fs=fs, nperseg=min(len(ppg_signal)//4, 512))
+    
+    # Find fundamental frequency (around heart rate)
+    hr_freq_range = (0.8, 3.0)  # 48-180 bpm
+    hr_mask = (freqs >= hr_freq_range[0]) & (freqs <= hr_freq_range[1])
+    if np.sum(hr_mask) > 0:
+        fundamental_idx = np.argmax(psd[hr_mask])
+        fundamental_freq = freqs[hr_mask][fundamental_idx]
+        fundamental_power = psd[hr_mask][fundamental_idx]
+        
+        # Find 2nd and 3rd harmonics
+        harmonic_2_freq = 2 * fundamental_freq
+        harmonic_3_freq = 3 * fundamental_freq
+        
+        # Find closest frequency bins
+        h2_idx = np.argmin(np.abs(freqs - harmonic_2_freq))
+        h3_idx = np.argmin(np.abs(freqs - harmonic_3_freq))
+        
+        harmonic_2_power = psd[h2_idx] if h2_idx < len(psd) else 0
+        harmonic_3_power = psd[h3_idx] if h3_idx < len(psd) else 0
+        
+        harmonic_ratio_2nd = harmonic_2_power / fundamental_power if fundamental_power > 0 else 0
+        harmonic_ratio_3rd = harmonic_3_power / fundamental_power if fundamental_power > 0 else 0
+    else:
+        harmonic_ratio_2nd = 0
+        harmonic_ratio_3rd = 0
+    
+    return {
+        'asymmetry_ratio': np.mean(asymmetry_ratios) if asymmetry_ratios else 0,
+        'harmonic_ratio_2nd': harmonic_ratio_2nd,
+        'harmonic_ratio_3rd': harmonic_ratio_3rd
+    }
+
+def calculate_enhanced_ptt_pat(ecg_signal, ppg_signal, fs):
+    """Calculate enhanced PTT and PAT with better alignment"""
+    # Find R-peaks in ECG with improved detection
+    ecg_filtered = filtfilt(*butter(3, [0.5, 15], btype='band', fs=fs), ecg_signal)
+    r_peaks, _ = find_peaks(ecg_filtered, height=np.percentile(ecg_filtered, 80), distance=int(0.3 * fs))
+    
+    # Find PPG peaks and feet with improved detection
+    ppg_filtered = filtfilt(*butter(3, [0.5, 8], btype='band', fs=fs), ppg_signal)
+    ppg_peaks, _ = find_peaks(ppg_filtered, distance=int(0.3 * fs))
+    ppg_feet, _ = find_peaks(-ppg_filtered, distance=int(0.3 * fs))
+    
+    # Calculate maximum slope points (dicrotic notch)
+    ppg_diff = np.diff(ppg_filtered)
+    ppg_max_slope = find_peaks(ppg_diff, distance=int(0.1 * fs))[0]
+    
+    if len(r_peaks) < 2:
+        return {'ptt_peak': 0, 'ptt_foot': 0, 'pat_slope': 0, 'ptt_variability': 0}
+    
+    ptt_peaks, ptt_feet, pat_slopes = [], [], []
+    
+    for r_peak in r_peaks:
+        # Find next PPG peak
+        future_ppg_peaks = ppg_peaks[ppg_peaks > r_peak]
+        if len(future_ppg_peaks) > 0:
+            next_ppg_peak = future_ppg_peaks[0]
+            if (next_ppg_peak - r_peak) / fs < 0.5:  # Reasonable PTT range
+                ptt_peaks.append((next_ppg_peak - r_peak) / fs)
+        
+        # Find next PPG foot
+        future_ppg_feet = ppg_feet[ppg_feet > r_peak]
+        if len(future_ppg_feet) > 0:
+            next_ppg_foot = future_ppg_feet[0]
+            if (next_ppg_foot - r_peak) / fs < 0.5:
+                ptt_feet.append((next_ppg_foot - r_peak) / fs)
+        
+        # Find next maximum slope point
+        future_slopes = ppg_max_slope[ppg_max_slope > r_peak]
+        if len(future_slopes) > 0:
+            next_slope = future_slopes[0]
+            if (next_slope - r_peak) / fs < 0.5:
+                pat_slopes.append((next_slope - r_peak) / fs)
+    
+    # Calculate variability
+    ptt_variability = np.std(ptt_peaks) if len(ptt_peaks) > 1 else 0
+    
+    return {
+        'ptt_peak': np.mean(ptt_peaks) if ptt_peaks else 0,
+        'ptt_foot': np.mean(ptt_feet) if ptt_feet else 0,
+        'pat_slope': np.mean(pat_slopes) if pat_slopes else 0,
+        'ptt_variability': ptt_variability
+    }
+
+def calculate_spectral_entropy(signal, fs):
+    """Calculate spectral entropy of the signal"""
+    try:
+        # Calculate power spectral density
+        freqs, psd = welch(signal, fs=fs, nperseg=min(len(signal)//4, 512))
+        
+        # Normalize PSD to get probability distribution
+        psd_norm = psd / np.sum(psd)
+        
+        # Calculate entropy
+        spectral_entropy = entropy(psd_norm)
+        
+        return spectral_entropy
+    except:
+        return 0
+
 def convert_file(filename: str) -> pd.DataFrame:
     """
     Convert .mat file to .csv format, extracting comprehensive features
@@ -281,6 +442,13 @@ def convert_file(filename: str) -> pd.DataFrame:
             
             # Calculate respiratory rate
             resp_rate = estimate_respiratory_rate(smooth_ppg, fs)
+            
+            # Calculate new features
+            time_to_peak = calculate_time_to_peak(smooth_ppg, ppg_peaks, ppg_troughs, fs)
+            ppg_asymmetry = calculate_ppg_asymmetry_harmonics(smooth_ppg, ppg_peaks, fs)
+            enhanced_ptt = calculate_enhanced_ptt_pat(smooth_ecg, smooth_ppg, fs)
+            ppg_spectral_entropy = calculate_spectral_entropy(smooth_ppg, fs)
+            ecg_spectral_entropy = calculate_spectral_entropy(smooth_ecg, fs)
 
             feature_row = [
                 np.mean(ptt_p),
@@ -316,6 +484,18 @@ def convert_file(filename: str) -> pd.DataFrame:
                 abp_metrics['dp_dt_max'],
                 # Respiratory
                 resp_rate,
+                # More features
+                time_to_peak['time_to_peak'],
+                time_to_peak['peak_to_peak_time'],
+                ppg_asymmetry['asymmetry_ratio'],
+                ppg_asymmetry['harmonic_ratio_2nd'],
+                ppg_asymmetry['harmonic_ratio_3rd'],
+                enhanced_ptt['ptt_peak'],
+                enhanced_ptt['ptt_foot'],
+                enhanced_ptt['pat_slope'],
+                enhanced_ptt['ptt_variability'],
+                ppg_spectral_entropy,
+                ecg_spectral_entropy,
             ]
             results.append(feature_row)
 
@@ -333,6 +513,11 @@ def convert_file(filename: str) -> pd.DataFrame:
         'pulse_pressure', 'map_pressure', 'dp_dt_max',
         # Respiratory
         'respiratory_rate',
+        # New features
+        'time_to_peak', 'peak_to_peak_time', 'asymmetry_ratio',
+        'harmonic_ratio_2nd', 'harmonic_ratio_3rd', 'ptt_peak_enhanced',
+        'ptt_foot_enhanced', 'pat_slope', 'ptt_variability',
+        'ppg_spectral_entropy', 'ecg_spectral_entropy',
     ]
     df = pd.DataFrame(results, columns=columns)
     if __name__ == '__main__':
