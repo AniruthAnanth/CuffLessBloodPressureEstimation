@@ -140,14 +140,9 @@ def calculate_abp_metrics(abp_signal, sbp, dbp):
     pulse_pressure = sbp - dbp
     map_pressure = dbp + pulse_pressure / 3
     
-    # dP/dtmax (maximum slope)
-    dp_dt = np.diff(abp_signal)
-    dp_dt_max = np.max(dp_dt) if len(dp_dt) > 0 else 0
-    
     return {
         'pulse_pressure': pulse_pressure,
-        'map_pressure': map_pressure,
-        'dp_dt_max': dp_dt_max
+        'map_pressure': map_pressure
     }
 
 def estimate_respiratory_rate(signal, fs):
@@ -329,6 +324,44 @@ def calculate_spectral_entropy(signal, fs):
     except:
         return 0
 
+def calculate_upstroke_curvature(signal, peaks, fs):
+    """Mean curvature of the rising limb for each beat."""
+    curvs = []
+    for pk in peaks:
+        # find preceding trough
+        troughs = np.where(np.diff(np.sign(signal - signal[pk]))>0)[0]
+        prev = troughs[troughs < pk]
+        if len(prev)==0: continue
+        start = prev[-1]
+        y = signal[start:pk+1]
+        t = np.arange(len(y)) / fs
+        dy = np.gradient(y, t)
+        ddy = np.gradient(dy, t)
+        # curvature k = |y''|/(1+y'²)^(3/2)
+        k = np.abs(ddy) / (1 + dy**2)**1.5
+        if len(k): curvs.append(np.mean(k))
+    return np.mean(curvs) if curvs else 0
+
+def calculate_harmonic_phase(signal, fs):
+    """Compute phase diff between 2nd/3rd harmonics and fundamental."""
+    N = len(signal)
+    freqs = np.fft.rfftfreq(N, 1/fs)
+    fftv = np.fft.rfft(signal)
+    # fundamental in typical HR band
+    mask = (freqs>=0.8)&(freqs<=3.0)
+    if not np.any(mask): return {'phase_diff_2nd':0,'phase_diff_3rd':0}
+    fund_idx = np.argmax(np.abs(fftv[mask]))
+    fund_bin = np.where(mask)[0][fund_idx]
+    φ1 = np.angle(fftv[fund_bin])
+    # 2nd & 3rd harmonic bins
+    def phase_diff(h):
+        idx = np.argmin(np.abs(freqs - freqs[fund_bin]*h))
+        return (np.angle(fftv[idx]) - φ1)
+    return {
+        'phase_diff_2nd': phase_diff(2),
+        'phase_diff_3rd': phase_diff(3)
+    }
+
 def convert_file(filename: str) -> pd.DataFrame:
     """
     Convert .mat file to .csv format, extracting comprehensive features
@@ -449,6 +482,12 @@ def convert_file(filename: str) -> pd.DataFrame:
             enhanced_ptt = calculate_enhanced_ptt_pat(smooth_ecg, smooth_ppg, fs)
             ppg_spectral_entropy = calculate_spectral_entropy(smooth_ppg, fs)
             ecg_spectral_entropy = calculate_spectral_entropy(smooth_ecg, fs)
+            # upstroke curvature
+            ppg_up_curv = calculate_upstroke_curvature(smooth_ppg, ppg_troughs, fs)
+            ecg_up_curv = calculate_upstroke_curvature(smooth_ecg, r_peaks, fs)
+            # harmonic-phase features
+            ppg_hph = calculate_harmonic_phase(smooth_ppg, fs)
+            ecg_hph = calculate_harmonic_phase(smooth_ecg, fs)
 
             feature_row = [
                 np.mean(ptt_p),
@@ -481,7 +520,6 @@ def convert_file(filename: str) -> pd.DataFrame:
                 # ABP metrics
                 abp_metrics['pulse_pressure'],
                 abp_metrics['map_pressure'],
-                abp_metrics['dp_dt_max'],
                 # Respiratory
                 resp_rate,
                 # More features
@@ -496,6 +534,12 @@ def convert_file(filename: str) -> pd.DataFrame:
                 enhanced_ptt['ptt_variability'],
                 ppg_spectral_entropy,
                 ecg_spectral_entropy,
+                ppg_up_curv,
+                ecg_up_curv,
+                ppg_hph['phase_diff_2nd'],
+                ppg_hph['phase_diff_3rd'],
+                ecg_hph['phase_diff_2nd'],
+                ecg_hph['phase_diff_3rd'],
             ]
             results.append(feature_row)
 
@@ -510,7 +554,7 @@ def convert_file(filename: str) -> pd.DataFrame:
         # Augmentation indices
         'aug_index', 'stiffness_index',
         # ABP metrics
-        'pulse_pressure', 'map_pressure', 'dp_dt_max',
+        'pulse_pressure', 'map_pressure',
         # Respiratory
         'respiratory_rate',
         # New features
@@ -518,6 +562,9 @@ def convert_file(filename: str) -> pd.DataFrame:
         'harmonic_ratio_2nd', 'harmonic_ratio_3rd', 'ptt_peak_enhanced',
         'ptt_foot_enhanced', 'pat_slope', 'ptt_variability',
         'ppg_spectral_entropy', 'ecg_spectral_entropy',
+        'ppg_upstroke_curvature', 'ecg_upstroke_curvature',
+        'ppg_harmonic_phase_diff_2nd', 'ppg_harmonic_phase_diff_3rd',
+        'ecg_harmonic_phase_diff_2nd', 'ecg_harmonic_phase_diff_3rd',
     ]
     df = pd.DataFrame(results, columns=columns)
     if __name__ == '__main__':
