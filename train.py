@@ -74,8 +74,10 @@ class BPDataset(Dataset):
         self.X = torch.tensor(X, dtype=torch.float32)
         # Reshape to [batch, 2 channels, time] assuming each beat has length 75
         self.X = self.X.view(-1, 2, 75)
-        # Only store diastolic BP
-        self.Y = torch.tensor(Y_dia, dtype=torch.float32).unsqueeze(1)
+        self.Y = torch.stack([
+            torch.tensor(Y_sys, dtype=torch.float32),
+            torch.tensor(Y_dia, dtype=torch.float32)
+        ], dim=1)
     def __len__(self): return len(self.X)
     def __getitem__(self, idx): return self.X[idx], self.Y[idx]
 
@@ -85,21 +87,26 @@ class BPDataset(Dataset):
 class Encoder(nn.Module):
     def __init__(self, input_dim, latent_dim=64):
         super().__init__()
-        # Remove CNN, add more recurrent layers
-        self.rnn1 = nn.LSTM(input_size=2, hidden_size=64, batch_first=True)
-        self.rnn2 = nn.LSTM(input_size=64, hidden_size=64, batch_first=True)
+        # New deeper CNN + RNN pipeline
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels=2, out_channels=16, kernel_size=3, padding=1), nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(16, 32, kernel_size=3, padding=1), nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2)
+        )
+        self.rnn = nn.LSTM(input_size=32, hidden_size=32, batch_first=True)
         self.fc = nn.Sequential(
-            nn.Linear(64, 128), nn.ReLU(),
+            nn.Linear(32, 128), nn.ReLU(),
             nn.Linear(128, latent_dim)
         )
 
     def forward(self, x):
         # x shape: [batch, 2, time]
-        x = x.transpose(1, 2)  # [batch, time, 2]
-        h1, (hn1, _) = self.rnn1(x)
-        h2, (hn2, _) = self.rnn2(h1)
-        hn2 = hn2.squeeze(0)
-        return self.fc(hn2)
+        features = self.cnn(x)              # [batch, 32, time//4]
+        features = features.transpose(1, 2) # [batch, time//4, 32]
+        _, (hn, _) = self.rnn(features)     # hn shape: [1, batch, 32]
+        hn = hn.squeeze(0)                  # [batch, 32]
+        return self.fc(hn)
 
 # Latent ODE Function integrating physics (parameterized Windkessel)
 class LatentODEFunc(nn.Module):
@@ -129,7 +136,7 @@ class Decoder(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(latent_dim, 32), nn.ReLU(),
-            nn.Linear(32, 1)  # Only diastolic BP
+            nn.Linear(32, 2)  # Systolic and Diastolic pressure
         )
     def forward(self, z):
         return self.net(z)
@@ -170,13 +177,14 @@ class EarlyStopping:
             if self.counter >= self.patience: self.stop = True
 
 def evaluate_metrics(preds, targets):
-    # Compute MSE, MAE, and Pearson correlation for diastolic BP only
+    # Compute MSE, MAE and Pearson correlation for each BP prediction dimension
     mse = nn.MSELoss()(preds, targets).item()
     mae = nn.L1Loss()(preds, targets).item()
-    preds_np = preds.detach().cpu().numpy().ravel()
-    targets_np = targets.detach().cpu().numpy().ravel()
-    corr = pearsonr(preds_np, targets_np)[0]
-    return mse, mae, corr
+    preds_np = preds.detach().cpu().numpy()
+    targets_np = targets.detach().cpu().numpy()
+    corr_sys = pearsonr(preds_np[:,0], targets_np[:,0])[0]
+    corr_dia = pearsonr(preds_np[:,1], targets_np[:,1])[0]
+    return mse, mae, (corr_sys + corr_dia) / 2
 
 import numpy as np
 
@@ -288,11 +296,15 @@ if __name__ == "__main__":
                 optimizer.zero_grad()
                 preds = model(xb)
                 loss = criterion(preds, yb)
-                # Soft physiological constraints (diastolic only)
-                dia_p = preds[:,0]
+                # Soft physiological constraints (as before)
+                sys_p, dia_p = preds[:,0], preds[:,1]
+                c1 = torch.relu(dia_p - sys_p).mean()                   # diastolic ≤ systolic
+                c2 = torch.relu(80 - sys_p).mean()                        # systolic lower bound
+                c3 = torch.relu(sys_p - 200).mean()                       # systolic upper bound
                 c4 = torch.relu(40 - dia_p).mean()                        # diastolic lower bound
                 c5 = torch.relu(dia_p - 120).mean()                       # diastolic upper bound
-                phys_pen = c4 + c5
+                c6 = torch.relu(10 - (sys_p - dia_p)).mean()              # minimum pulse pressure
+                phys_pen = c1 + c2 + c3 + c4 + c5 + c6
                 total_loss = loss + phys_weight * phys_pen
                 total_loss.backward()
                 optimizer.step()
@@ -336,12 +348,15 @@ if __name__ == "__main__":
 
         preds_np = all_preds.detach().cpu().numpy()
         targets_np = all_targets.detach().cpu().numpy()
-        # Evaluate BHS/AAMI only for diastolic BP
-        dif_dia = preds_np - targets_np
+        dif_sys = preds_np[:,0] - targets_np[:,0]
+        dif_dia = preds_np[:,1] - targets_np[:,1]
+        bhs_sys = evaluate_bhs(dif_sys)
         bhs_dia = evaluate_bhs(dif_dia)
+        aami_sys = evaluate_aami(dif_sys)
         aami_dia = evaluate_aami(dif_dia)
-        print(f"BHS DIA (fold {fold}): {bhs_dia}")
-        print(f"AAMI DIA (fold {fold}): {aami_dia}")
+        print(f"BHS SYS (fold {fold}): {bhs_sys}, BHS DIA (fold {fold}): {bhs_dia}")
+        print(f"AAMI SYS (fold {fold}): {aami_sys}, AAMI DIA (fold {fold}): {aami_dia}")
+        all_sys_err.extend(dif_sys.tolist())
         all_dia_err.extend(dif_dia.tolist())
 
     # Reporting average metrics across folds
@@ -351,9 +366,12 @@ if __name__ == "__main__":
     print("\nFinal Report:")
     print(f"Average MSE: {avg_mse:.4f}, Average MAE: {avg_mae:.4f}, Average Correlation: {avg_corr:.4f}")
 
-    # Print final results only for diastolic BP
+    bhs_sys_final = evaluate_bhs(all_sys_err)
     bhs_dia_final = evaluate_bhs(all_dia_err)
+    aami_sys_final = evaluate_aami(all_sys_err)
     aami_dia_final = evaluate_aami(all_dia_err)
+    print("Final BHS SYS:", bhs_sys_final)
     print("Final BHS DIA:", bhs_dia_final)
+    print("Final AAMI SYS:", aami_sys_final)
     print("Final AAMI DIA:", aami_dia_final)
 
