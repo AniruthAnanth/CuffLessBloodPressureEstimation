@@ -8,11 +8,17 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from torchdiffeq import odeint
 from scipy.signal import find_peaks
 from sklearn.model_selection import KFold
-from scipy.stats import pearsonr
-import argparse
+from scipy.stats import pearsonr, wilcoxon
 import random
 import json
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+from data_utils import load_waveforms, detect_r_peaks, segment_beats, normalize_beats, compute_bp_features, BPDataset
+from models import BPModel
+from train_utils import EarlyStopping, evaluate_metrics, evaluate_bhs, evaluate_aami
 
+plt.style.use('ggplot')
 # Set seeds for reproducibility
 seed = 42
 np.random.seed(seed)
@@ -23,355 +29,219 @@ if torch.cuda.is_available():
 
 INPUT_DIR = 'data/mat/'
 
-# Data loading and preprocessing functions
-def load_waveforms(filename):
-    """
-    Load raw PPG, ABP, ECG signals from a .mat file.
-    """
-    name = os.path.splitext(filename)[0]
-    path = os.path.join(INPUT_DIR, filename)
-    mat = h5py.File(path, 'r')
-    refs = mat[name]              # group containing records
-    element_ref = refs[0][0]      # first record reference
-    data = np.array(mat[element_ref]).T
-    mat.close()
-    ppg, abp, ecg = data[0, :], data[1, :], data[2, :]
-    return ppg, abp, ecg
-
-# Detect R-peaks in ECG (simple Pan-Tompkins approximation)
-def detect_r_peaks(ecg, fs=125, distance_sec=0.6):
-    distance = int(distance_sec * fs)
-    threshold = np.mean(ecg) + 0.5 * np.std(ecg)
-    peaks, _ = find_peaks(ecg, distance=distance, height=threshold)
-    return peaks
-
-# Segment PPG, ABP, ECG into beats around each R-peak
-def segment_beats(signals, r_peaks, fs=125, pre_sec=0.2, post_sec=0.4):
-    pre = int(pre_sec * fs)
-    post = int(post_sec * fs)
-    ppg, abp, ecg = signals
-    ppg_beats, abp_beats, ecg_beats = [], [], []
-    for r in r_peaks:
-        if r - pre >= 0 and r + post <= len(ppg):
-            ppg_beats.append(ppg[r-pre:r+post])
-            abp_beats.append(abp[r-pre:r+post])
-            ecg_beats.append(ecg[r-pre:r+post])
-    return np.array(ppg_beats), np.array(abp_beats), np.array(ecg_beats)
-
-# Normalize each beat (zero-mean, unit-variance)
-def normalize_beats(beats):
-    return np.array([(b - np.mean(b)) / np.std(b) for b in beats])
-
-# Compute systolic (max) and diastolic (min) BP for each ABP-beat
-def compute_bp_features(abp_beats):
-    systolic = np.max(abp_beats, axis=1)
-    diastolic = np.min(abp_beats, axis=1)
-    return systolic, diastolic
-
-# Dataset class
-class BPDataset(Dataset):
-    def __init__(self, X, Y_sys, Y_dia):
-        self.X = torch.tensor(X, dtype=torch.float32)
-        # Reshape to [batch, 2 channels, time] assuming each beat has length 75
-        self.X = self.X.view(-1, 2, 75)
-        self.Y = torch.stack([
-            torch.tensor(Y_sys, dtype=torch.float32),
-            torch.tensor(Y_dia, dtype=torch.float32)
-        ], dim=1)
-    def __len__(self): return len(self.X)
-    def __getitem__(self, idx): return self.X[idx], self.Y[idx]
-
-# New Model Components for Latent ODE Modeling
-
-# Encoder: maps beat input to latent state z0
-class Encoder(nn.Module):
-    def __init__(self, input_dim, latent_dim=64):
-        super().__init__()
-        # New deeper CNN + RNN pipeline
-        self.cnn = nn.Sequential(
-            nn.Conv1d(in_channels=2, out_channels=16, kernel_size=3, padding=1), nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2),
-            nn.Conv1d(16, 32, kernel_size=3, padding=1), nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2)
-        )
-        self.rnn = nn.LSTM(input_size=32, hidden_size=32, batch_first=True)
-        self.fc = nn.Sequential(
-            nn.Linear(32, 128), nn.ReLU(),
-            nn.Linear(128, latent_dim)
-        )
-
-    def forward(self, x):
-        # x shape: [batch, 2, time]
-        features = self.cnn(x)              # [batch, 32, time//4]
-        features = features.transpose(1, 2) # [batch, time//4, 32]
-        _, (hn, _) = self.rnn(features)     # hn shape: [1, batch, 32]
-        hn = hn.squeeze(0)                  # [batch, 32]
-        return self.fc(hn)
-
-# Latent ODE Function integrating physics (parameterized Windkessel)
-class LatentODEFunc(nn.Module):
-    def __init__(self, latent_dim=16):
-        super().__init__()
-        # Learnable Windkessel parameters (baseline values)
-        self.log_R = nn.Parameter(torch.log(torch.tensor(1.2)))
-        self.log_C = nn.Parameter(torch.log(torch.tensor(1.5)))
-        # Additional NN to model characteristic impedance/time-varying compliance
-        self.comp_net = nn.Sequential(
-            nn.Linear(latent_dim, 32), nn.ReLU(),
-            nn.Linear(32, latent_dim)
-        )
-    def forward(self, t, z):
-        # Compute dynamic compliance as a function of latent state
-        comp = self.comp_net(z)
-        # Transform learnable parameters
-        R = torch.exp(self.log_R)
-        C = torch.exp(self.log_C)
-        # ODE: dz/dt = ( - z / R + comp )/ C
-        dzdt = (-z / R + comp) / C
-        return dzdt
-
-# Decoder: reconstruct BP from latent state
-class Decoder(nn.Module):
-    def __init__(self, latent_dim=16):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(latent_dim, 32), nn.ReLU(),
-            nn.Linear(32, 2)  # Systolic and Diastolic pressure
-        )
-    def forward(self, z):
-        return self.net(z)
-
-# Full BP Model using latent ODE
-class BPModel(nn.Module):
-    def __init__(self, input_dim, latent_dim=64, use_ode=True):
-        super().__init__()
-        self.encoder = Encoder(input_dim, latent_dim)
-        self.use_ode = use_ode
-        # Increase hidden dimension in ODE or keep as is
-        self.odefunc = LatentODEFunc(latent_dim) if use_ode else None
-        self.decoder = Decoder(latent_dim)
-    def forward(self, x):
-        # Encode input beats into latent state
-        z0 = self.encoder(x)
-        if self.use_ode:
-            # evolve latent ODE over time; here we use [0,1]
-            ts = torch.tensor([0.0, 1.0], device=x.device)
-            zt = odeint(self.odefunc, z0, ts)
-            zT = zt[-1]
-        else:
-            # If ODE is not used, bypass evolution
-            zT = z0
-        # Decode latent state to BP predictions
-        return self.decoder(zT)
-
-# EarlyStopping class (unchanged)
-class EarlyStopping:
-    def __init__(self, patience=7, delta=1e-3):
-        self.patience, self.delta = patience, delta
-        self.best_loss = float('inf'); self.counter = 0; self.stop = False
-    def __call__(self, val_loss):
-        if val_loss < self.best_loss - self.delta:
-            self.best_loss, self.counter = val_loss, 0
-        else:
-            self.counter += 1
-            if self.counter >= self.patience: self.stop = True
-
-def evaluate_metrics(preds, targets):
-    # Compute MSE, MAE and Pearson correlation for each BP prediction dimension
-    mse = nn.MSELoss()(preds, targets).item()
-    mae = nn.L1Loss()(preds, targets).item()
-    preds_np = preds.detach().cpu().numpy()
-    targets_np = targets.detach().cpu().numpy()
-    corr_sys = pearsonr(preds_np[:,0], targets_np[:,0])[0]
-    corr_dia = pearsonr(preds_np[:,1], targets_np[:,1])[0]
-    return mse, mae, (corr_sys + corr_dia) / 2
-
-import numpy as np
-
-def evaluate_bhs(differences_mmHg):
-    differences_mmHg = np.abs(differences_mmHg)
-    n = len(differences_mmHg)
-    pct_5 = np.sum(differences_mmHg <= 5) / n * 100
-    pct_10 = np.sum(differences_mmHg <= 10) / n * 100
-    pct_15 = np.sum(differences_mmHg <= 15) / n * 100
-    if pct_5 >= 60 and pct_10 >= 85 and pct_15 >= 95:
-        grade = 'A'
-    elif pct_5 >= 50 and pct_10 >= 75 and pct_15 >= 90:
-        grade = 'B'
-    elif pct_5 >= 40 and pct_10 >= 65 and pct_15 >= 85:
-        grade = 'C'
-    else:
-        grade = 'D'
-    return {
-        'grade': grade,
-        'percent_within_5mmHg': pct_5,
-        'percent_within_10mmHg': pct_10,
-        'percent_within_15mmHg': pct_15
-    }
-
-def evaluate_aami(differences_mmHg):
-    differences_mmHg = np.array(differences_mmHg)
-    mean_error = np.mean(differences_mmHg)
-    std_dev = np.std(differences_mmHg, ddof=1)
-    pass_fail = 'Pass' if abs(mean_error) <= 5 and std_dev <= 8 else 'Fail'
-    return {
-        'pass_fail': pass_fail,
-        'mean_error_mmHg': mean_error,
-        'std_dev_mmHg': std_dev
-    }
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--use_ode', action='store_true', help='Toggle latent ODE component')
-    parser.add_argument('--ablation', action='store_true', help='Run ablation study using only soft penalties')
-    args = parser.parse_args()
-
-    # Save configuration for reproducibility
-    config = vars(args)
-    with open("config.json", "w") as f:
-        json.dump(config, f, indent=4)
-
-    # Load and preprocess data
-    files = os.listdir(INPUT_DIR)
-    all_ppg, all_ecg = [], []
-    all_sys, all_dia = [], []
-    for fn in files:
-        ppg, abp, ecg = load_waveforms(fn)
-        r_peaks = detect_r_peaks(ecg, fs=125)
-        ppg_b, abp_b, ecg_b = segment_beats((ppg, abp, ecg), r_peaks, fs=125)
-        ppg_n = normalize_beats(ppg_b)
-        ecg_n = normalize_beats(ecg_b)
-        sys_vals, dia_vals = compute_bp_features(abp_b)
-        all_ppg.append(ppg_n)
-        all_ecg.append(ecg_n)
-        all_sys.extend(sys_vals)
-        all_dia.extend(dia_vals)
-    X_ppg = np.vstack(all_ppg)
-    X_ecg = np.vstack(all_ecg)
-    X = np.hstack([X_ppg, X_ecg])
-    Y_sys = np.array(all_sys)
-    Y_dia = np.array(all_dia)
-
-    dataset = BPDataset(X, Y_sys, Y_dia)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # 5-fold cross validation
-    kf = KFold(n_splits=5, shuffle=True, random_state=seed)
-    fold = 0
-    all_metrics = []
-    all_sys_err = []
-    all_dia_err = []
-    for train_index, test_index in kf.split(dataset):
-        fold += 1
-        print(f"\nFold {fold}")
-        train_subset = Subset(dataset, train_index)
-        test_subset = Subset(dataset, test_index)
-        # Further split train into train and validation (80-20)
-        n_train = len(train_subset)
-        indices = list(range(n_train))
-        split_at = int(0.8 * n_train)
-        train_indices, val_indices = indices[:split_at], indices[split_at:]
-        train_ds = Subset(train_subset, train_indices)
-        val_ds = Subset(train_subset, val_indices)
-        train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
-        val_loader   = DataLoader(val_ds, batch_size=32)
-        test_loader  = DataLoader(test_subset, batch_size=32)
-
-        # Build model
-        input_dim = X.shape[1]
-        model = BPModel(input_dim, latent_dim=16, use_ode=args.use_ode and not args.ablation).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=1e-3)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
-        criterion = nn.MSELoss()
-        early = EarlyStopping(patience=10)
-        phys_weight = 100    # weight for physiological penalty
-
-        # Training loop for this fold
-        epochs = 100
-        for epoch in range(epochs):
-            model.train()
-            train_loss = 0
-            for xb, yb in train_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                optimizer.zero_grad()
-                preds = model(xb)
-                loss = criterion(preds, yb)
-                # Soft physiological constraints (as before)
+def train_model(model, train_loader, val_loader, test_loader, phys_weight, device):
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
+    criterion = nn.MSELoss()
+    early = EarlyStopping(patience=10)
+    num_epochs = 100
+    # Training
+    for epoch in range(num_epochs):
+        # linear annealing of physics weight
+        cur_weight = phys_weight * (epoch / max(1, num_epochs-1)) if phys_weight>0 else 0.0
+        model.train()
+        total_loss = 0
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            preds = model(xb)
+            loss = criterion(preds, yb)
+            # physics-based penalty with annealed weight
+            if cur_weight>0:
                 sys_p, dia_p = preds[:,0], preds[:,1]
-                c1 = torch.relu(dia_p - sys_p).mean()                   # diastolic ≤ systolic
-                c2 = torch.relu(80 - sys_p).mean()                        # systolic lower bound
-                c3 = torch.relu(sys_p - 200).mean()                       # systolic upper bound
-                c4 = torch.relu(40 - dia_p).mean()                        # diastolic lower bound
-                c5 = torch.relu(dia_p - 120).mean()                       # diastolic upper bound
-                c6 = torch.relu(10 - (sys_p - dia_p)).mean()              # minimum pulse pressure
-                phys_pen = c1 + c2 + c3 + c4 + c5 + c6
-                total_loss = loss + phys_weight * phys_pen
-                total_loss.backward()
-                optimizer.step()
-                train_loss += total_loss.item() * xb.size(0)
-            train_loss /= len(train_loader.dataset)
-            # Validation loop
-            model.eval()
-            val_loss = 0
-            with torch.no_grad():
-                for xb, yb in val_loader:
-                    xb, yb = xb.to(device), yb.to(device)
-                    preds = model(xb)
-                    loss = criterion(preds, yb)
-                    val_loss += loss.item() * xb.size(0)
-            val_loss /= len(val_loader.dataset)
-            scheduler.step(val_loss)
-            print(f"Epoch {epoch}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-            early(val_loss)
-            if early.stop:
-                print("Early stopping triggered.")
-                break
-
-        # Testing on fold
+                c1 = torch.relu(dia_p - sys_p).mean()
+                c2 = torch.relu(80 - sys_p).mean()
+                c3 = torch.relu(sys_p - 200).mean()
+                c4 = torch.relu(40 - dia_p).mean()
+                c5 = torch.relu(dia_p - 120).mean()
+                c6 = torch.relu(10 - (sys_p - dia_p)).mean()
+                loss += cur_weight * (c1+c2+c3+c4+c5+c6)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()*xb.size(0)
+        # validation and LR scheduling
         model.eval()
-        test_loss = 0
-        all_preds = []
-        all_targets = []
+        val_loss=0
         with torch.no_grad():
-            for xb, yb in test_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                preds = model(xb)
-                test_loss += criterion(preds, yb).item() * xb.size(0)
-                all_preds.append(preds)
-                all_targets.append(yb)
-        test_loss /= len(test_loader.dataset)
-        all_preds = torch.cat(all_preds, dim=0)
-        all_targets = torch.cat(all_targets, dim=0)
-        mse, mae, corr = evaluate_metrics(all_preds, all_targets)
-        print(f"Fold {fold} Test Loss: {test_loss:.4f}, MSE: {mse:.4f}, MAE: {mae:.4f}, Corr: {corr:.4f}")
-        all_metrics.append({'fold': fold, 'test_loss': test_loss, 'mse': mse, 'mae': mae, 'corr': corr})
+            for xb,yb in val_loader:
+                xb,yb = xb.to(device), yb.to(device)
+                val_loss += criterion(model(xb), yb).item()*xb.size(0)
+        scheduler.step(val_loss)
+        early(val_loss)
+        if early.stop: break
+    # Testing
+    model.eval()
+    preds_list, target_list = [],[]
+    with torch.no_grad():
+        for xb,yb in test_loader:
+            xb,yb = xb.to(device), yb.to(device)
+            out = model(xb)
+            preds_list.append(out)
+            target_list.append(yb)
+    all_preds=torch.cat(preds_list); all_targets=torch.cat(target_list)
+    return all_preds, all_targets
 
-        preds_np = all_preds.detach().cpu().numpy()
-        targets_np = all_targets.detach().cpu().numpy()
-        dif_sys = preds_np[:,0] - targets_np[:,0]
-        dif_dia = preds_np[:,1] - targets_np[:,1]
-        bhs_sys = evaluate_bhs(dif_sys)
-        bhs_dia = evaluate_bhs(dif_dia)
-        aami_sys = evaluate_aami(dif_sys)
-        aami_dia = evaluate_aami(dif_dia)
-        print(f"BHS SYS (fold {fold}): {bhs_sys}, BHS DIA (fold {fold}): {bhs_dia}")
-        print(f"AAMI SYS (fold {fold}): {aami_sys}, AAMI DIA (fold {fold}): {aami_dia}")
-        all_sys_err.extend(dif_sys.tolist())
-        all_dia_err.extend(dif_dia.tolist())
 
-    # Reporting average metrics across folds
-    avg_mse = np.mean([m['mse'] for m in all_metrics])
-    avg_mae = np.mean([m['mae'] for m in all_metrics])
-    avg_corr = np.mean([m['corr'] for m in all_metrics])
-    print("\nFinal Report:")
-    print(f"Average MSE: {avg_mse:.4f}, Average MAE: {avg_mae:.4f}, Average Correlation: {avg_corr:.4f}")
+def augment_noise(dataset, noise_std):
+    # Handle full dataset or Subset
+    if isinstance(dataset, Subset):
+        X_orig = dataset.dataset.X[dataset.indices]
+        Y_orig = dataset.dataset.Y[dataset.indices]
+    else:
+        X_orig = dataset.X
+        Y_orig = dataset.Y
+    noisy_X = X_orig + torch.randn_like(X_orig) * noise_std
+    return torch.utils.data.TensorDataset(noisy_X, Y_orig)
 
-    bhs_sys_final = evaluate_bhs(all_sys_err)
-    bhs_dia_final = evaluate_bhs(all_dia_err)
-    aami_sys_final = evaluate_aami(all_sys_err)
-    aami_dia_final = evaluate_aami(all_dia_err)
-    print("Final BHS SYS:", bhs_sys_final)
-    print("Final BHS DIA:", bhs_dia_final)
-    print("Final AAMI SYS:", aami_sys_final)
-    print("Final AAMI DIA:", aami_dia_final)
 
+def evaluate_robustness(model, test_dataset, device, noise_levels):
+    results = {}
+    for nl in noise_levels:
+        noisy_ds = augment_noise(test_dataset, nl)
+        loader = DataLoader(noisy_ds, batch_size=32)
+        _, targets = train_model(model, DataLoader(test_dataset,32), DataLoader(test_dataset,32), loader, phys_weight=0, device=device)
+        preds, _ = train_model(model, DataLoader(test_dataset,32), DataLoader(test_dataset,32), loader, phys_weight=0, device=device)
+        mse, mae, _ = evaluate_metrics(preds, targets.to(device))
+        results[nl] = {'mse':mse,'mae':mae}
+    return results
+
+
+def calibrate_param_net(model, loader, device, shots=32, lr=1e-4, epochs=5):
+    """Fine-tune only the ODE parameters (param_net) on a small calibration set"""
+    # Freeze all but param_net
+    for name, p in model.named_parameters():
+        p.requires_grad = 'odefunc.param_net' in name
+    optimizer = optim.Adam(model.odefunc.param_net.parameters(), lr=lr)
+    criterion = nn.MSELoss()
+    model.train()
+    # Few-shot: take up to shots samples
+    adapt_loader = DataLoader(loader.dataset, batch_size=shots, shuffle=True)
+    for epoch in range(epochs):
+        for xb, yb in adapt_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            preds = model(xb)
+            loss = criterion(preds, yb)
+            loss.backward()
+            optimizer.step()
+    return model
+
+# Load and preprocess data
+files = os.listdir(INPUT_DIR)
+all_ppg, all_ecg = [], []
+all_sys, all_dia = [], []
+for fn in files:
+    ppg, abp, ecg = load_waveforms(fn)
+    r_peaks = detect_r_peaks(ecg, fs=125)
+    ppg_b, abp_b, ecg_b = segment_beats((ppg, abp, ecg), r_peaks, fs=125)
+    ppg_n = normalize_beats(ppg_b)
+    ecg_n = normalize_beats(ecg_b)
+    sys_vals, dia_vals = compute_bp_features(abp_b)
+    all_ppg.append(ppg_n)
+    all_ecg.append(ecg_n)
+    all_sys.extend(sys_vals)
+    all_dia.extend(dia_vals)
+X_ppg = np.vstack(all_ppg)
+X_ecg = np.vstack(all_ecg)
+X = np.hstack([X_ppg, X_ecg])
+Y_sys = np.array(all_sys)
+Y_dia = np.array(all_dia)
+
+# Visualize data distributions and example beats
+plt.figure()
+plt.hist(Y_sys, bins=50, alpha=0.7, label='Systolic')
+plt.hist(Y_dia, bins=50, alpha=0.7, label='Diastolic')
+plt.title('Blood Pressure Distribution')
+plt.xlabel('Pressure (mmHg)')
+plt.ylabel('Count')
+plt.legend()
+plt.show()
+plt.close()
+
+# Plot first PPG and ECG beat examples
+plt.figure()
+plt.plot(X_ppg[0], label='PPG Beat Sample')
+plt.plot(X_ecg[0], label='ECG Beat Sample')
+plt.title('Example Normalized Beats')
+plt.xlabel('Time Index')
+plt.ylabel('Normalized Amplitude')
+plt.legend()
+plt.show()
+plt.close()
+
+dataset = BPDataset(X, Y_sys, Y_dia)
+# Determine input dimension for RNN (sequence feature size)
+input_dim = dataset.X.shape[2]
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Split dataset
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+# Split by indices using the feature array
+train_idx_np, test_idx_np = next(kf.split(X))
+train_idx, test_idx = train_idx_np.tolist(), test_idx_np.tolist()
+train_ds = Subset(dataset, train_idx)
+# 80/20 train/validation split on train indices
+val_split = int(0.8 * len(train_idx))
+val_idx = train_idx[val_split:]
+train_idx = train_idx[:val_split]
+val_ds = Subset(dataset, val_idx)
+test_ds = Subset(dataset, test_idx)
+train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_ds, batch_size=32)
+test_loader = DataLoader(test_ds, batch_size=32)
+
+# Baseline (data-driven)
+base_model = BPModel(input_dim, latent_dim=16, use_ode=False).to(device)
+base_preds, base_targets = train_model(base_model, train_loader, val_loader, test_loader, phys_weight=0, device=device)
+base_mse, base_mae, base_corr = evaluate_metrics(base_preds, base_targets)
+print(f'Baseline MSE: {base_mse}, MAE: {base_mae}, Corr: {base_corr}')
+
+# PINN model
+pinn_model = BPModel(input_dim, latent_dim=16, use_ode=True).to(device)
+pinn_preds, pinn_targets = train_model(pinn_model, train_loader, val_loader, test_loader, phys_weight=100, device=device)
+pinn_mse, pinn_mae, pinn_corr = evaluate_metrics(pinn_preds, pinn_targets)
+print(f'PINN MSE: {pinn_mse}, MAE: {pinn_mae}, Corr: {pinn_corr}')
+
+# Diagnostics: latent trajectories and parameter summary
+with torch.no_grad():
+    x_sample, _ = next(iter(test_loader))
+    x_sample = x_sample.to(device)
+    z0 = pinn_model.encoder(x_sample)
+    ts_diag = torch.linspace(0.0, 1.0, 10, device=device)
+    zt_diag = odeint(pinn_model.odefunc, z0, ts_diag, method='rk4', rtol=1e-6, atol=1e-6)
+    # plot first sample, first latent dimension
+    plt.figure()
+    plt.plot(ts_diag.cpu(), zt_diag[:,0,0].cpu(), label='latent dim0')
+    plt.title('Latent Trajectory Sample 0, dim0')
+    plt.xlabel('t'); plt.ylabel('z'); plt.show(); plt.close()
+    # parameter summary
+    params_vals = torch.exp(pinn_model.odefunc.param_net(z0)).cpu().numpy()
+    print('Learned R/C parameters (Rp,Rd,C) mean:', np.mean(params_vals, axis=0), 'std:', np.std(params_vals, axis=0))
+
+# Statistical validation
+base_err = (base_preds - base_targets).flatten().cpu().numpy()
+pinn_err = (pinn_preds - pinn_targets).flatten().cpu().numpy()
+stat, p = wilcoxon(base_err, pinn_err)
+print(f'Wilcoxon test p-value: {p}')
+
+# clinical standards
+bhs_base = evaluate_bhs(base_err)
+bhs_pinn = evaluate_bhs(pinn_err)
+print("BHS grades → baseline:", bhs_base, "PINN:", bhs_pinn)
+
+aami_base = evaluate_aami(base_err)
+aami_pinn = evaluate_aami(pinn_err)
+print("AAMI (mean±std) → baseline:", aami_base, "PINN:", aami_pinn)
+
+# Robustness under noise
+#noise_levels=[0.01,0.05,0.1]
+#base_rob = evaluate_robustness(base_model, test_ds, device, noise_levels)
+#pinn_rob = evaluate_robustness(pinn_model, test_ds, device, noise_levels)
+#print('Robustness:', base_rob, pinn_rob)
+
+# Dynamic calibration
+pinn_calibrated = BPModel(input_dim, latent_dim=16, use_ode=True).to(device)
+pinn_calibrated.load_state_dict(pinn_model.state_dict())  # copy weights
+pinn_calibrated = calibrate_param_net(pinn_calibrated, test_loader, device)
+cal_preds, cal_targets = train_model(pinn_calibrated, train_loader, val_loader, test_loader, phys_weight=100, device=device)
+cal_mse, cal_corr = evaluate_metrics(cal_preds, cal_targets)
+print(f'Calibrated PINN MSE: {cal_mse}, Corr: {cal_corr}')
