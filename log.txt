@@ -1,0 +1,217 @@
+>> python train.py --ablation
+
+Fold 1
+Epoch 0, Train Loss: 9096.0086, Val Loss: 4335.5542
+Epoch 1, Train Loss: 6323.7611, Val Loss: 1106.8049
+Epoch 2, Train Loss: 316.9910, Val Loss: 233.8122
+Epoch 3, Train Loss: 30.0604, Val Loss: 35.1113
+Epoch 4, Train Loss: 8.6465, Val Loss: 54.1308
+Epoch 5, Train Loss: 7.8010, Val Loss: 48.0809
+Epoch 6, Train Loss: 7.5637, Val Loss: 48.2223
+Epoch 7, Train Loss: 7.5589, Val Loss: 49.2501
+Epoch 8, Train Loss: 7.5597, Val Loss: 48.9798
+Epoch 9, Train Loss: 7.5498, Val Loss: 48.4569
+Epoch 10, Train Loss: 7.5426, Val Loss: 48.1977
+Epoch 11, Train Loss: 7.5490, Val Loss: 48.2060
+Epoch 12, Train Loss: 7.5440, Val Loss: 48.1542
+Epoch 13, Train Loss: 7.5438, Val Loss: 48.1482
+Early stopping triggered.
+Fold 1 Test Loss: 15.0520, MSE: 15.0520, MAE: 2.6358, Corr: 0.0688
+BHS DIA (fold 1): {'grade': 'A', 'percent_within_5mmHg': 86.25954198473282, 'percent_within_10mmHg': 95.80152671755725, 'percent_within_15mmHg': 99.61832061068702}
+AAMI DIA (fold 1): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.8535429, 'std_dev_mmHg': 3.7918816}
+
+Fold 2
+Epoch 0, Train Loss: 9056.9509, Val Loss: 4253.4004
+Epoch 1, Train Loss: 5535.2752, Val Loss: 508.8426
+Epoch 2, Train Loss: 154.5580, Val Loss: 115.5816
+Epoch 3, Train Loss: 16.1415, Val Loss: 38.8889
+Epoch 4, Train Loss: 8.8435, Val Loss: 43.3001
+Epoch 5, Train Loss: 8.0234, Val Loss: 46.4722
+Epoch 6, Train Loss: 8.0809, Val Loss: 43.3439
+Epoch 7, Train Loss: 7.9732, Val Loss: 46.3411
+Epoch 8, Train Loss: 8.0301, Val Loss: 45.6094
+Epoch 9, Train Loss: 7.9871, Val Loss: 44.8786
+Epoch 10, Train Loss: 7.9913, Val Loss: 45.0836
+Epoch 11, Train Loss: 7.9827, Val Loss: 44.7163
+Epoch 12, Train Loss: 7.9820, Val Loss: 44.6487
+Epoch 13, Train Loss: 7.9817, Val Loss: 44.7435
+Early stopping triggered.
+Fold 2 Test Loss: 15.9260, MSE: 15.9260, MAE: 2.6473, Corr: 0.0794
+BHS DIA (fold 2): {'grade': 'A', 'percent_within_5mmHg': 86.25954198473282, 'percent_within_10mmHg': 94.65648854961832, 'percent_within_15mmHg': 99.61832061068702}
+AAMI DIA (fold 2): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.6331804, 'std_dev_mmHg': 3.9477296}
+
+Fold 3
+Epoch 0, Train Loss: 8995.3737, Val Loss: 4141.8933
+Epoch 1, Train Loss: 5109.2038, Val Loss: 324.9499
+Epoch 2, Train Loss: 128.1785, Val Loss: 94.3396
+Epoch 3, Train Loss: 14.6923, Val Loss: 38.4165
+Epoch 4, Train Loss: 8.2221, Val Loss: 43.9701
+Epoch 5, Train Loss: 7.7304, Val Loss: 45.6553
+Epoch 6, Train Loss: 7.6869, Val Loss: 43.0584
+Epoch 7, Train Loss: 7.7275, Val Loss: 44.7306
+Epoch 8, Train Loss: 7.6699, Val Loss: 44.6017
+Epoch 9, Train Loss: 7.6724, Val Loss: 44.2046
+Epoch 10, Train Loss: 7.6711, Val Loss: 44.2521
+Epoch 11, Train Loss: 7.6719, Val Loss: 44.4227
+Epoch 12, Train Loss: 7.6687, Val Loss: 44.4634
+Epoch 13, Train Loss: 7.6685, Val Loss: 44.4174
+Early stopping triggered.
+Fold 3 Test Loss: 17.4844, MSE: 17.4844, MAE: 2.7833, Corr: 0.0056
+BHS DIA (fold 3): {'grade': 'A', 'percent_within_5mmHg': 85.0574712643678, 'percent_within_10mmHg': 94.25287356321839, 'percent_within_15mmHg': 99.23371647509579}
+AAMI DIA (fold 3): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.93050706, 'std_dev_mmHg': 4.084416}
+
+Fold 4
+Epoch 0, Train Loss: 9100.9756, Val Loss: 4414.7485
+Epoch 1, Train Loss: 7411.2767, Val Loss: 2032.6446
+Epoch 2, Train Loss: 961.9166, Val Loss: 307.6939
+Epoch 3, Train Loss: 57.7532, Val Loss: 33.5610
+Epoch 4, Train Loss: 11.2476, Val Loss: 59.0742
+Epoch 5, Train Loss: 8.3253, Val Loss: 48.3111
+Epoch 6, Train Loss: 8.2677, Val Loss: 51.1803
+Epoch 7, Train Loss: 8.1803, Val Loss: 48.7886
+Epoch 8, Train Loss: 8.1556, Val Loss: 49.4014
+Epoch 9, Train Loss: 8.1344, Val Loss: 50.3939
+Epoch 10, Train Loss: 8.1214, Val Loss: 50.6926
+Epoch 11, Train Loss: 8.1175, Val Loss: 50.9152
+Epoch 12, Train Loss: 8.1110, Val Loss: 50.8829
+Epoch 13, Train Loss: 8.1112, Val Loss: 50.9207
+Early stopping triggered.
+Fold 4 Test Loss: 11.0662, MSE: 11.0662, MAE: 2.3323, Corr: -0.0425
+BHS DIA (fold 4): {'grade': 'A', 'percent_within_5mmHg': 89.272030651341, 'percent_within_10mmHg': 97.70114942528735, 'percent_within_15mmHg': 100.0}
+AAMI DIA (fold 4): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.47497004, 'std_dev_mmHg': 3.2988381}
+
+Fold 5
+Epoch 0, Train Loss: 8995.6750, Val Loss: 4146.4802
+Epoch 1, Train Loss: 5041.6045, Val Loss: 288.5688
+Epoch 2, Train Loss: 123.5708, Val Loss: 95.2547
+Epoch 3, Train Loss: 14.3799, Val Loss: 39.6666
+Epoch 4, Train Loss: 7.3967, Val Loss: 47.0870
+Epoch 5, Train Loss: 7.2258, Val Loss: 47.7607
+Epoch 6, Train Loss: 7.0774, Val Loss: 45.1123
+Epoch 7, Train Loss: 7.1111, Val Loss: 45.4071
+Epoch 8, Train Loss: 7.0873, Val Loss: 45.5052
+Epoch 9, Train Loss: 7.0839, Val Loss: 45.7653
+Epoch 10, Train Loss: 7.0751, Val Loss: 46.0597
+Epoch 11, Train Loss: 7.0727, Val Loss: 46.1581
+Epoch 12, Train Loss: 7.0712, Val Loss: 46.2144
+Epoch 13, Train Loss: 7.0719, Val Loss: 46.1608
+Early stopping triggered.
+Fold 5 Test Loss: 18.1379, MSE: 18.1379, MAE: 2.8372, Corr: 0.0245
+BHS DIA (fold 5): {'grade': 'A', 'percent_within_5mmHg': 84.67432950191571, 'percent_within_10mmHg': 93.10344827586206, 'percent_within_15mmHg': 99.61685823754789}
+AAMI DIA (fold 5): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.9903901, 'std_dev_mmHg': 4.1500583}
+
+Final Report:
+Average MSE: 15.5333, Average MAE: 2.6472, Average Correlation: 0.0271
+Final BHS DIA: {'grade': 'A', 'percent_within_5mmHg': 86.30451415455241, 'percent_within_10mmHg': 95.10328997704667, 'percent_within_15mmHg': 99.61744452945676}
+Final AAMI DIA: {'pass_fail': 'Pass', 'mean_error_mmHg': 0.7764673736502218, 'std_dev_mmHg': 3.865457789152563}
+
+
+
+>> python train.py --use_ode 
+
+Fold 1
+Epoch 0, Train Loss: 9087.1183, Val Loss: 4363.2640
+Epoch 1, Train Loss: 5271.2678, Val Loss: 59.9629
+Epoch 2, Train Loss: 190.7658, Val Loss: 49.5560
+Epoch 3, Train Loss: 20.3323, Val Loss: 40.4534
+Epoch 4, Train Loss: 9.2364, Val Loss: 49.8325
+Epoch 5, Train Loss: 7.8627, Val Loss: 51.4880
+Epoch 6, Train Loss: 7.5591, Val Loss: 47.2614
+Epoch 7, Train Loss: 7.5996, Val Loss: 46.8541
+Epoch 8, Train Loss: 7.5416, Val Loss: 48.4031
+Epoch 9, Train Loss: 7.5605, Val Loss: 47.8018
+Epoch 10, Train Loss: 7.5526, Val Loss: 48.4732
+Epoch 11, Train Loss: 7.5596, Val Loss: 48.1490
+Epoch 12, Train Loss: 7.5437, Val Loss: 48.2452
+Epoch 13, Train Loss: 7.5446, Val Loss: 48.2183
+Early stopping triggered.
+Fold 1 Test Loss: 15.0675, MSE: 15.0675, MAE: 2.6364, Corr: 0.0542
+BHS DIA (fold 1): {'grade': 'A', 'percent_within_5mmHg': 86.25954198473282, 'percent_within_10mmHg': 95.80152671755725, 'percent_within_15mmHg': 99.61832061068702}
+AAMI DIA (fold 1): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.86254823, 'std_dev_mmHg': 3.7918835}
+
+Fold 2
+Epoch 0, Train Loss: 9175.8765, Val Loss: 4544.6602
+Epoch 1, Train Loss: 7387.1633, Val Loss: 1691.7805
+Epoch 2, Train Loss: 585.1124, Val Loss: 37.7512
+Epoch 3, Train Loss: 32.4789, Val Loss: 71.3249
+Epoch 4, Train Loss: 10.2047, Val Loss: 40.0951
+Epoch 5, Train Loss: 8.0918, Val Loss: 42.6939
+Epoch 6, Train Loss: 8.1085, Val Loss: 44.5282
+Epoch 7, Train Loss: 7.9882, Val Loss: 44.3337
+Epoch 8, Train Loss: 7.9936, Val Loss: 44.6936
+Epoch 9, Train Loss: 7.9910, Val Loss: 44.2767
+Epoch 10, Train Loss: 7.9884, Val Loss: 44.9408
+Epoch 11, Train Loss: 7.9834, Val Loss: 44.9148
+Epoch 12, Train Loss: 7.9824, Val Loss: 44.8468
+Early stopping triggered.
+Fold 2 Test Loss: 15.9442, MSE: 15.9442, MAE: 2.6474, Corr: 0.0667
+BHS DIA (fold 2): {'grade': 'A', 'percent_within_5mmHg': 85.87786259541986, 'percent_within_10mmHg': 94.65648854961832, 'percent_within_15mmHg': 99.61832061068702}
+AAMI DIA (fold 2): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.64726895, 'std_dev_mmHg': 3.9477553}
+
+Fold 3
+Epoch 0, Train Loss: 9116.9133, Val Loss: 4471.9420
+Epoch 1, Train Loss: 6970.2013, Val Loss: 1279.5192
+Epoch 2, Train Loss: 384.1703, Val Loss: 35.0554
+Epoch 3, Train Loss: 27.4840, Val Loss: 68.7758
+Epoch 4, Train Loss: 9.5789, Val Loss: 40.5677
+Epoch 5, Train Loss: 7.7963, Val Loss: 42.0779
+Epoch 6, Train Loss: 7.6819, Val Loss: 46.5875
+Epoch 7, Train Loss: 7.7318, Val Loss: 45.5771
+Epoch 8, Train Loss: 7.6688, Val Loss: 43.6682
+Epoch 9, Train Loss: 7.6832, Val Loss: 44.2012
+Epoch 10, Train Loss: 7.6796, Val Loss: 44.2647
+Epoch 11, Train Loss: 7.6702, Val Loss: 44.2550
+Epoch 12, Train Loss: 7.6698, Val Loss: 44.3069
+Early stopping triggered.
+Fold 3 Test Loss: 17.4569, MSE: 17.4569, MAE: 2.7820, Corr: 0.0058
+BHS DIA (fold 3): {'grade': 'A', 'percent_within_5mmHg': 85.0574712643678, 'percent_within_10mmHg': 94.25287356321839, 'percent_within_15mmHg': 99.23371647509579}
+AAMI DIA (fold 3): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.9156152, 'std_dev_mmHg': 4.0844164}
+
+Fold 4
+Epoch 0, Train Loss: 9149.4326, Val Loss: 4516.9717
+Epoch 1, Train Loss: 8149.1716, Val Loss: 2682.9178
+Epoch 2, Train Loss: 1376.8162, Val Loss: 77.3130
+Epoch 3, Train Loss: 41.5259, Val Loss: 94.8361
+Epoch 4, Train Loss: 12.4214, Val Loss: 49.1908
+Epoch 5, Train Loss: 8.2022, Val Loss: 49.0497
+Epoch 6, Train Loss: 8.1348, Val Loss: 48.8277
+Epoch 7, Train Loss: 8.1693, Val Loss: 54.5575
+Epoch 8, Train Loss: 8.1186, Val Loss: 48.7308
+Epoch 9, Train Loss: 8.1785, Val Loss: 52.9563
+Epoch 10, Train Loss: 8.1910, Val Loss: 49.4856
+Epoch 11, Train Loss: 8.1501, Val Loss: 52.1545
+Epoch 12, Train Loss: 8.1688, Val Loss: 51.8855
+Epoch 13, Train Loss: 8.1235, Val Loss: 50.5401
+Epoch 14, Train Loss: 8.1186, Val Loss: 50.7844
+Epoch 15, Train Loss: 8.1148, Val Loss: 50.7165
+Epoch 16, Train Loss: 8.1230, Val Loss: 50.8833
+Epoch 17, Train Loss: 8.1124, Val Loss: 50.8331
+Epoch 18, Train Loss: 8.1114, Val Loss: 50.8394
+Early stopping triggered.
+Fold 4 Test Loss: 11.0574, MSE: 11.0574, MAE: 2.3315, Corr: -0.0353
+BHS DIA (fold 4): {'grade': 'A', 'percent_within_5mmHg': 89.272030651341, 'percent_within_10mmHg': 97.70114942528735, 'percent_within_15mmHg': 100.0}
+AAMI DIA (fold 4): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.46562925, 'std_dev_mmHg': 3.298834}
+
+Fold 5
+Epoch 0, Train Loss: 9134.2977, Val Loss: 4377.7566
+Epoch 1, Train Loss: 5910.2858, Val Loss: 362.6767
+Epoch 2, Train Loss: 164.7024, Val Loss: 35.4112
+Epoch 3, Train Loss: 27.6603, Val Loss: 68.6535
+Epoch 4, Train Loss: 7.9445, Val Loss: 45.5625
+Epoch 5, Train Loss: 7.0880, Val Loss: 46.7516
+Epoch 6, Train Loss: 7.0959, Val Loss: 44.4396
+Epoch 7, Train Loss: 7.1146, Val Loss: 45.4637
+Epoch 8, Train Loss: 7.0796, Val Loss: 45.9291
+Epoch 9, Train Loss: 7.0743, Val Loss: 46.2914
+Epoch 10, Train Loss: 7.0808, Val Loss: 46.0259
+Epoch 11, Train Loss: 7.0723, Val Loss: 46.0729
+Epoch 12, Train Loss: 7.0716, Val Loss: 46.1466
+Early stopping triggered.
+Fold 5 Test Loss: 18.1342, MSE: 18.1342, MAE: 2.8370, Corr: 0.0497
+BHS DIA (fold 5): {'grade': 'A', 'percent_within_5mmHg': 84.67432950191571, 'percent_within_10mmHg': 93.10344827586206, 'percent_within_15mmHg': 99.61685823754789}
+AAMI DIA (fold 5): {'pass_fail': 'Pass', 'mean_error_mmHg': 0.9885694, 'std_dev_mmHg': 4.1500545}
+
+Final Report:
+Average MSE: 15.5321, Average MAE: 2.6469, Average Correlation: 0.0282
+Final BHS DIA: {'grade': 'A', 'percent_within_5mmHg': 86.22800306044377, 'percent_within_10mmHg': 95.10328997704667, 'percent_within_15mmHg': 99.61744452945676}
+Final AAMI DIA: {'pass_fail': 'Pass', 'mean_error_mmHg': 0.7758940833163973, 'std_dev_mmHg': 3.865415509771544}

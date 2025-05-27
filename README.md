@@ -1,14 +1,4 @@
 
-
-## Data Preprocessing
-Run the following command after downloading the .mat files from the UCI ML Repo, and placing them in `data/mat/`:
-
-```
-python preprocess.py
-```
-
-This will generate the csv datasets in `data/csv/`.
-
 ## Citations, References, Links
 
 - Kachuee, M., Kiani, M., Mohammadzade, H., & Shabany, M. (2015). Cuff-Less Blood Pressure Estimation [Dataset]. _UCI Machine Learning Repository_. https://doi.org/10.24432/C5B602.
